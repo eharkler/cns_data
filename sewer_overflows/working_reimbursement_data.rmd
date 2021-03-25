@@ -1,0 +1,52 @@
+---
+title: "working_reimbursement_data"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load in the required packages to clean the data
+
+```{r}
+library(tidyverse)
+library(vembedr)
+library(janitor)
+```
+
+# Read in the dirty raw data
+
+```{r}
+# Read in dirty dataset
+tidied_reimbursement_requests_redacted <- read_csv("data/tidied_reimbursement_requests_redacted.csv")
+
+tidied_reimbursement_requests_redacted
+
+```
+
+# Glimpse the data
+
+```{r}
+glimpse(tidied_reimbursement_requests_redacted)
+
+
+# We see that it has read in the time (in days) and all of the money values as characters, we want it to be viewed as a number.
+
+```
+# Clean up the data
+
+```{r}
+
+clean_reimbursement_requests <- tidied_reimbursement_requests_redacted %>%
+  # clean up those unsightly column names using janitor function clean_names() to get rid of spaces & uppercase
+  clean_names() %>%
+  # get rid of empty rows using janitor function remove_empty()
+  remove_empty()
+  
+
+```
+
+
+
+```
