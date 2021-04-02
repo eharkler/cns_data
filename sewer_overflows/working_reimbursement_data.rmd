@@ -7,12 +7,23 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r}
+
+install.packages("tidycensus")
+
+```
+
 # Load in the required packages to clean the data
 
 ```{r}
 library(tidyverse)
 library(vembedr)
 library(janitor)
+library(dplyr)
+library(tidycensus)
+
+census_api_key("549950d36c22ff16455fe196bbbd01d63cfbe6cf")
+
 ```
 
 # Read in the dirty raw data
@@ -41,12 +52,143 @@ glimpse(tidied_reimbursement_requests_redacted)
 clean_reimbursement_requests <- tidied_reimbursement_requests_redacted %>%
   # clean up those unsightly column names using janitor function clean_names() to get rid of spaces & uppercase
   clean_names() %>%
-  # get rid of empty rows using janitor function remove_empty()
-  remove_empty()
   
+  # get rid of empty rows using janitor function remove_empty()
+  remove_empty() %>%
+  
+  # remove subtotals and fy rows
+  filter(!is.na(location_of_incident)) %>%
+  
+  # remove $'s and commas for amount_of_request
+  mutate(amount_of_request = str_remove_all(amount_of_request,"\\$|,|[a-z]|[A-Z]")) %>%
+  mutate(amount_of_request = str_trim(amount_of_request)) %>%
+  mutate(amount_of_request = na_if(amount_of_request,"")) %>%
+  
+  # remove $'s and commas for amount_approved
+  mutate(amount_approved = str_remove_all(amount_approved,"\\$|,|[a-z]|[A-Z]")) %>%
+  mutate(amount_approved = str_trim(amount_approved)) %>%
+  mutate(amount_approved = na_if(amount_approved,"")) %>%
+
+  # change to chr column
+  mutate(amount_of_request = as.numeric(amount_of_request)) %>%
+  mutate(amount_approved = as.numeric(amount_approved)) %>%
+  
+  # create new column where we collapse into just approved or denied without the extra addendums
+  mutate(request_determination_cleaned = case_when(
+    str_detect(request_determination,"Approved")~"Approved",
+    str_detect(request_determination, "Denied")~"Denied"
+  )) %>%
+  
+  mutate(zip_code = str_sub(location_of_incident, start = -5L, end = -1L)) %>%
+  mutate(zip_code = case_when(
+    str_detect(zip_code,"East") ~ "21228", TRUE ~ zip_code
+  ))
+  
+  
+
+```
+# Get the number of approved and denied requests: 19 approved, 101 denied
+
+```{r}
+
+requests_approved_denied <- clean_reimbursement_requests %>%
+  group_by(request_determination_cleaned) %>%
+  count()
+
+
+```
+
+# Get the total amount paid out to approvals ever: $19,559.41
+
+```{r}
+
+total_amnt_paid <- clean_reimbursement_requests %>%
+  select(amount_approved) %>%
+  summarise(amnt_paid_in_total = sum(amount_approved, na.rm = TRUE))
+
+
+```
+
+# Get the avg amount requested from the city: ~$2,355.58
+
+```{r}
+
+avg_amnt_requested <- clean_reimbursement_requests %>%
+  select(amount_of_request) %>%
+  # divide the total amnt of money requested by total # of requests (120)
+  summarise(avg_requested = sum(amount_of_request, na.rm = TRUE)/120)
+
+```
+
+# Get the avg amount paid per approval: ~$1029.44
+
+```{r}
+
+avg_paid_per_approval <- clean_reimbursement_requests %>%
+  select(amount_approved) %>%
+  #divide total amount approved by total # of approvals (19)
+  summarise(avg_approved = sum(amount_approved, na.rm = TRUE)/19)
+  
+```
+
+# Calculate zip code totals
+```{r}
+
+zip_code_totals <- clean_reimbursement_requests %>%
+  group_by(zip_code, request_determination_cleaned) %>%
+  count() %>%
+  pivot_wider(names_from = request_determination_cleaned, values_from = n) %>%
+  clean_names() %>%
+  mutate(denied = replace_na(denied, 0), approved = replace_na(approved, 0)) %>%
+  mutate(totals = approved + denied) %>%
+  mutate(pct_approved = approved/totals*100)
+
 
 ```
 
 
+# Using tidycensus, load in ZCTA API
+```{r}
+
+zcta_median_household_income <- get_acs(geography = "zcta",
+              variables="B19013_001", year=2018, geometry = FALSE )
+
+working_zcta_median_household_income <- zcta_median_household_income %>%
+  clean_names() %>%
+  mutate(name = str_remove(name, "ZCTA5 ")) %>%
+  rename(median_household_income = estimate) %>%
+  select(name, median_household_income)
+
+```
+
+
+
+```{r}
+
+acs_variables <- load_variables(2018, "acs5")
+
+
+```
+
+
+```{r}
+
+zcta_black_population <- get_acs(geography = "zcta", summary_var = "B02001_001",
+              variables="B02001_003", year=2018, geometry = FALSE )
+
+working_zcta_black_population <- zcta_black_population %>%
+  clean_names() %>%
+  mutate(name = str_remove(name, "ZCTA5 ")) %>%
+  mutate(pct_black = estimate/summary_est*100) %>%
+  select(name,pct_black)
+
+```
+
+# Left joining ZCTA and Baltimore zips
+```{r}
+
+joined_zip_codes <- zip_code_totals %>%
+  left_join(working_zcta_median_household_income, by = c("zip_code" = "name")) %>%
+  left_join(working_zcta_black_population, by = c("zip_code" = "name"))
 
 ```
