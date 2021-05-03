@@ -7,6 +7,12 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r}
+
+install.packages("tidycensus")
+
+```
+
 # Load in the required packages to clean the data
 
 ```{r}
@@ -15,7 +21,6 @@ library(vembedr)
 library(janitor)
 library(dplyr)
 library(tidycensus)
-library(lubridate)
 
 census_api_key("549950d36c22ff16455fe196bbbd01d63cfbe6cf")
 
@@ -83,19 +88,6 @@ clean_reimbursement_requests <- tidied_reimbursement_requests_redacted %>%
   
 
 ```
-# What denial was most commonly invoked?
-
-```{r}
-
-denials_by_frequency <- clean_reimbursement_requests %>%
-  filter(request_determination == "Denied") %>%
-  select(determination_rationale)
-
-
-
-```
-
-
 # Get the number of approved and denied requests: 19 approved, 101 denied
 
 ```{r}
@@ -140,45 +132,41 @@ avg_paid_per_approval <- clean_reimbursement_requests %>%
   
 ```
 
+# Calculate zip code totals
+```{r}
 
-# Load in 311 calls data from start of program (2018 to 2021)
+zip_code_totals <- clean_reimbursement_requests %>%
+  group_by(zip_code, request_determination_cleaned) %>%
+  count() %>%
+  pivot_wider(names_from = request_determination_cleaned, values_from = n) %>%
+  clean_names() %>%
+  mutate(denied = replace_na(denied, 0), approved = replace_na(approved, 0)) %>%
+  mutate(totals = approved + denied) %>%
+  mutate(pct_approved = approved/totals*100)
+
+
+```
+
+
+# Using tidycensus, load in ZCTA API
+```{r}
+
+zcta_median_household_income <- get_acs(geography = "zcta",
+              variables="B19013_001", year=2018, geometry = FALSE )
+
+working_zcta_median_household_income <- zcta_median_household_income %>%
+  clean_names() %>%
+  mutate(name = str_remove(name, "ZCTA5 ")) %>%
+  rename(median_household_income = estimate) %>%
+  select(name, median_household_income)
+
+```
+
+
 
 ```{r}
 
-calls_2018 <- read_csv("data/311_calls_2018.csv") %>%
-  clean_names() %>%
-  select(service_request_num, sr_type, created_date, method_received) %>%
-  mutate(created_date = as_date(created_date)) %>%
-  mutate(year = year(created_date)) %>%
-  filter(method_received == "Phone", sr_type == "WW-Sewer Water In Basement") 
-
-calls_2019 <- read_csv("data/311_calls_2019.csv") %>%
-  clean_names() %>%
-  select(service_request_num, sr_type, created_date, method_received) %>%
-  mutate(created_date = as_date(created_date)) %>%
-  mutate(year = year(created_date)) %>%
-  filter(method_received == "Phone", sr_type == "WW-Sewer Water In Basement")
-
-calls_2020 <- read_csv("data/311_calls_2020.csv")  %>%
-  clean_names() %>%
-  select(service_request_num, sr_type, created_date, method_received) %>%
-  mutate(created_date = as_date(created_date)) %>%
-  mutate(year = year(created_date)) %>%
-  filter(method_received == "Phone", sr_type == "WW-Sewer Water In Basement")
-
-calls_2021 <- read_csv("data/311_calls_2021.csv") %>%
-  clean_names() %>%
-  select(service_request_num, sr_type, created_date, method_received) %>%
-  mutate(created_date = as_date(created_date)) %>%
-  mutate(year = year(created_date)) %>%
-  filter(method_received == "Phone", sr_type == "WW-Sewer Water In Basement")
-
-
-calls_since_start <- rbind(calls_2018, calls_2019, calls_2020, calls_2021)
-
-
-
-
+acs_variables <- load_variables(2018, "acs5")
 
 
 ```
@@ -186,6 +174,22 @@ calls_since_start <- rbind(calls_2018, calls_2019, calls_2020, calls_2021)
 
 ```{r}
 
-write.csv(clean_reimbursement_requests, "cleaned_reimbursement_data.csv")
+zcta_black_population <- get_acs(geography = "zcta", summary_var = "B02001_001",
+              variables="B02001_003", year=2018, geometry = FALSE )
+
+working_zcta_black_population <- zcta_black_population %>%
+  clean_names() %>%
+  mutate(name = str_remove(name, "ZCTA5 ")) %>%
+  mutate(pct_black = estimate/summary_est*100) %>%
+  select(name,pct_black)
+
+```
+
+# Left joining ZCTA and Baltimore zips
+```{r}
+
+joined_zip_codes <- zip_code_totals %>%
+  left_join(working_zcta_median_household_income, by = c("zip_code" = "name")) %>%
+  left_join(working_zcta_black_population, by = c("zip_code" = "name"))
 
 ```
